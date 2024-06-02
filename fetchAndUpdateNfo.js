@@ -1,8 +1,11 @@
 import fetch from "node-fetch";
 import { JSDOM } from "jsdom";
-import fs from "fs/promises"; // Use fs/promises for async operations
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 // Get the current directory name
 const __filename = fileURLToPath(import.meta.url);
@@ -10,7 +13,7 @@ const __dirname = path.dirname(__filename);
 
 const movieDir = path.join(__dirname, "movie"); // Path to the movie directory
 
-// Function to fetch the title and actor from the website
+// Function to fetch the title, release date, actor, director, studio, and genres from the website using XPath
 async function fetchMovieDetails(url) {
   try {
     const response = await fetch(url);
@@ -23,45 +26,139 @@ async function fetchMovieDetails(url) {
     const dom = new JSDOM(html);
     const document = dom.window.document;
 
-    // Extract movie title
-    const titleElement = document.querySelector(
-      "h1.text-base.lg\\:text-lg.text-nord6"
+    // Extract the title
+    const titleXPathResult = document.evaluate(
+      '//*[@id="main"]/header/h1',
+      document,
+      null,
+      dom.window.XPathResult.FIRST_ORDERED_NODE_TYPE,
+      null
     );
-    const movieTitle = titleElement ? titleElement.textContent.trim() : null;
+    const titleElement = titleXPathResult.singleNodeValue;
+    const title = titleElement ? titleElement.textContent.trim() : null;
 
-    // Extract actor name
-    const actorElement = document.querySelector("a.text-nord13.font-medium");
-    const actorName = actorElement ? actorElement.textContent.trim() : null;
+    // Extract the release date
+    const releasedateXPathResult = document.evaluate(
+      '//*[@id="main"]/div/div/div[2]/div[2]/p[5]',
+      document,
+      null,
+      dom.window.XPathResult.FIRST_ORDERED_NODE_TYPE,
+      null
+    );
+    const releasedateElement = releasedateXPathResult.singleNodeValue;
+    let releasedate = releasedateElement
+      ? releasedateElement.textContent.trim()
+      : null;
 
-    if (!movieTitle || !actorName) {
-      throw new Error("Required elements not found");
+    // Remove the first 14 characters from the release date
+    if (releasedate) {
+      releasedate = releasedate.substring(14);
     }
 
-    return { movieTitle, actorName };
+    // Extract the actor name
+    const actorXPathResult = document.evaluate(
+      '//*[@id="main"]/div/div/div[2]/div[2]/p[10]/span/a',
+      document,
+      null,
+      dom.window.XPathResult.FIRST_ORDERED_NODE_TYPE,
+      null
+    );
+    const actorElement = actorXPathResult.singleNodeValue;
+    const actor = actorElement ? actorElement.textContent.trim() : null;
+
+    // Extract the director name
+    const directorXPathResult = document.evaluate(
+      '//*[@id="main"]/div/div/div[2]/div[2]/p[8]/span/a',
+      document,
+      null,
+      dom.window.XPathResult.FIRST_ORDERED_NODE_TYPE,
+      null
+    );
+    const directorElement = directorXPathResult.singleNodeValue;
+    const director = directorElement
+      ? directorElement.textContent.trim()
+      : null;
+
+    // Extract the studio name
+    const studioXPathResult = document.evaluate(
+      '//*[@id="main"]/div/div/div[2]/div[2]/p[7]/span/a',
+      document,
+      null,
+      dom.window.XPathResult.FIRST_ORDERED_NODE_TYPE,
+      null
+    );
+    const studioElement = studioXPathResult.singleNodeValue;
+    const studio = studioElement ? studioElement.textContent.trim() : null;
+
+    // Extract genres
+    const genreElements = document.evaluate(
+      '//*[@id="main"]/div/div/div[2]/div[2]/p[9]/span',
+      document,
+      null,
+      dom.window.XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+      null
+    );
+
+    const genres = [];
+    for (let i = 0; i < genreElements.snapshotLength; i++) {
+      const genreElement = genreElements.snapshotItem(i);
+      genres.push(genreElement.textContent.trim());
+    }
+
+    return { title, releasedate, actor, director, studio, genres };
   } catch (error) {
     console.error("Error fetching or parsing the HTML:", error);
-    return null;
+    return {
+      title: null,
+      releasedate: null,
+      actor: null,
+      director: null,
+      studio: null,
+      genres: [],
+    };
   }
 }
 
-// Function to read all folders in the movie directory
+// Function to read all folders and subfolders in the movie directory
 async function readFolders(directory) {
-  const entries = await fs.readdir(directory, { withFileTypes: false });
-  return entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name);
+  let folders = [];
+  const entries = await fs.promises.readdir(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      folders.push(fullPath);
+      folders = folders.concat(await readFolders(fullPath));
+    }
+  }
+  return folders;
 }
 
-// Function to create NFO file with movie title and actor
-async function createNfoFile(folderPath, movieTitle, actorName) {
+// Function to create NFO file with movie details
+function createNfoFile(
+  folderPath,
+  movieTitle,
+  movieReleaseDate,
+  movieActor,
+  movieDirector,
+  movieStudio,
+  movieGenres
+) {
+  const genresString = movieGenres
+    .map((genre) => `<genre>${genre}</genre>`)
+    .join("\n    ");
   const nfoContent = `
 <movie>
     <title>${movieTitle}</title>
-    <actor>${actorName}</actor>
+    <mpaa>XXX</mpaa>
+    <premiered>${movieReleaseDate}</premiered>
+    <director>${movieDirector}</director>
+    <studio>${movieStudio}</studio>
+    <actor><name>${movieActor}</name></actor>
+    ${genresString}
 </movie>
   `;
   const nfoFilePath = path.join(folderPath, "movie.nfo");
-  await fs.writeFile(nfoFilePath, nfoContent, "utf8");
+  fs.writeFileSync(nfoFilePath, nfoContent, "utf8");
   console.log(`NFO file created at: ${nfoFilePath}`);
 }
 
@@ -72,21 +169,30 @@ async function processFolders() {
     const results = [];
 
     for (const folder of folders) {
-      const url = `https://missav.com/en/${folder}`;
-      const movieDetails = await fetchMovieDetails(url);
+      const folderName = path.basename(folder);
+      //env for movie nfo
+      const url = process.env.URL_NFO + folderName;
+      const { title, releasedate, actor, director, studio, genres } =
+        await fetchMovieDetails(url);
 
-      if (movieDetails) {
-        const { movieTitle, actorName } = movieDetails;
-        const folderPath = path.join(movieDir, folder);
-        await createNfoFile(folderPath, movieTitle, actorName);
-        results.push(`${folder}: ${movieTitle} - ${actorName}`);
+      if (title) {
+        createNfoFile(
+          folder,
+          title,
+          releasedate,
+          actor,
+          director,
+          studio,
+          genres
+        );
+        results.push(`${folder}: ${title}`);
       } else {
-        results.push(`${folder}: Failed to get the movie details`);
+        results.push(`${folder}: Failed to get the movie title`);
       }
     }
 
     // Output the results
-    results.forEach((result) => console.log(result));
+    results.forEach((results) => console.log(results));
   } catch (error) {
     console.error("Error processing folders:", error);
   }

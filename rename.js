@@ -1,8 +1,11 @@
 import fs from "fs";
 import path from "path";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 // Define the path to the movie folder
-const movieFolderPath = "./movie";
+const movieFolderPath = process.env.MOVIE_DIR;
 
 // Recursive function to process files in directories and subdirectories
 const processDirectory = (directory) => {
